@@ -28,14 +28,14 @@ The network topology is as follows:
 Taking the router equipment of the mainstream network manufacturer as an example, this paper briefly introduces how the router equipment can turn on the equivalent routing load balancing of BGP ECMP.
 
 <font size="3">**2.1 Cisco Network Equipment Configuration BGP ECMP**</font><br>
-可以使用下面的命令来开启EBGP ECMP：
+You can use the following command to turn on EBGP ECMP：
 <table><tr><td bgcolor=#000000><font color=#F0E68C>
 [config-Router] config terminal<br>
 [config-Router] bgp 64558<br>
 [config-Router] maximum-paths 32<br>
 </font></td></tr></table>
 
-可以使用下面的命令来开启IBGP ECMP：
+You can use the following command to turn on IBGP ECMP：
 <table><tr><td bgcolor=#000000><font color=#F0E68C>
 [config-Router] config terminal<br>
 [config-Router] bgp 64558<br>
@@ -43,7 +43,7 @@ Taking the router equipment of the mainstream network manufacturer as an example
 </font></td></tr></table>
 
 <font size="3">**2.2 Huawei Network Equipment Configuration BGP ECMP**</font><br>
-可以使用下面的命令来开启EBGP ECMP：
+You can use the following command to turn on EBGP ECMP：
 <table><tr><td bgcolor=#000000><font color=#F0E68C>
 [Router] system view<br>
 [Router] bgp 64558<br>
@@ -51,7 +51,7 @@ Taking the router equipment of the mainstream network manufacturer as an example
 [Router-bgp-af-ipv4] maximum load-balancing ebgp 32<br>
 </font></td></tr></table>
 
-可以使用下面的命令来开启IBGP ECMP：
+You can use the following command to turn on IBGP ECMP：
 <table><tr><td bgcolor=#000000><font color=#F0E68C>
 [Router] system view<br>
 [Router] bgp 64558<br>

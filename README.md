@@ -2,7 +2,6 @@
 ![avatar](docs/img/kube-router-logo.jpg)
 
 <br>
-
 Kube-router is a turnkey solution for Kubernetes networking with aim to provide operational simplicity and high performance.<br>
 This is an optimized Kube-router, which can support large-scale kubernetes network.
 <br>

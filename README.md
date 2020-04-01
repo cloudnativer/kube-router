@@ -1,4 +1,7 @@
-![logo](https://cdn.rawgit.com/cloudnativelabs/kube-router/64f7700e/Documentation/img/logo-full.svg)
+
+![avatar](docs/img/kube-router-logo.jpg)
+
+<br>
 
 [![Build Status](https://travis-ci.org/cloudnativelabs/kube-router.svg?branch=master)](https://travis-ci.org/cloudnativelabs/kube-router)
 [![Slack](https://img.shields.io/badge/slack-join%20chat%20%E2%86%92-e01563.svg)](https://kubernetes.slack.com/messages/C8DCQGTSB/)

@@ -18,7 +18,7 @@ The network topology is as follows:
 ![avatar](../docs/img/large-networks01.jpg)
 
 <br>
-<font size="4">**Optimization scheme of large k8s cluster BGP network**</font><br>
+<font size="4">Optimization scheme of large k8s cluster BGP network</font><br>
 In order for your architecture to support a larger network, you need to do the following two things:
 <br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(1) Set the parameter "--enable-ibgp=false", do not let kubernetes node directly establish BGP neighbors with each other. Let your kubernetes node only build BGP neighbors with the on-line router device. See this link for details (<a href="../docs/large-networks02.md">large-networks02 documentation</a>).

@@ -301,8 +301,3 @@ By setting the parameter "--enable-ibgp=false", we achieve the effect of BGP nei
 <br>
 <br>
 
-
-
-
-
-

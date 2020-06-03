@@ -2,7 +2,7 @@ package routing
 
 import (
 	"errors"
-	"fmt"
+	"github.com/golang/glog"
 
 	"github.com/cloudnativelabs/kube-router/pkg/utils"
 	"github.com/osrg/gobgp/config"
@@ -19,17 +19,12 @@ func (nrc *NetworkRoutingController) AddPolicies() error {
 		return nil
 	}
 
-	cidr, err := utils.GetPodCidrFromNodeSpec(nrc.clientset, nrc.hostnameOverride)
-	if err != nil {
-		return err
-	}
-
 	// creates prefix set to represent the assigned node's pod CIDR
 	podCidrPrefixSet, err := table.NewPrefixSet(config.PrefixSet{
 		PrefixSetName: "podcidrprefixset",
 		PrefixList: []config.Prefix{
 			{
-				IpPrefix: cidr,
+				IpPrefix: nrc.podCidr,
 			},
 		},
 	})
@@ -42,15 +37,15 @@ func (nrc *NetworkRoutingController) AddPolicies() error {
 	advIPPrefixList := make([]config.Prefix, 0)
 	advIps, _, _ := nrc.getAllVIPs()
 
-	//If the value of advertise-svc-cidr parameter is not empty, then the value of advertise-svc-cidr parameter is put into RIB, otherwise it will be done according to the original rules.
-        if len(nrc.advertiseClusterSubnet) != 0 {
-                advIPPrefixList = append(advIPPrefixList, config.Prefix{IpPrefix: nrc.advertiseClusterSubnet})
-        } else {
-                for _, ip := range advIps {
-                        //housj add
-                        advIPPrefixList = append(advIPPrefixList, config.Prefix{IpPrefix: ip + "/32"})
-                }
-        }
+	//If the value of advertise-cluster-subnet parameter is not empty, then the value of advertise-cluster-subnet parameter is put into RIB, otherwise it will be done according to the original rules.
+	if len(nrc.advertiseClusterSubnet) != 0 {
+		advIPPrefixList = append(advIPPrefixList, config.Prefix{IpPrefix: nrc.advertiseClusterSubnet})
+	} else {
+		for _, ip := range advIps {
+			//housj add
+			advIPPrefixList = append(advIPPrefixList, config.Prefix{IpPrefix: ip + "/32"})
+		}
+	}
 
 	clusterIPPrefixSet, err := table.NewPrefixSet(config.PrefixSet{
 		PrefixSetName: "clusteripprefixset",
@@ -61,15 +56,16 @@ func (nrc *NetworkRoutingController) AddPolicies() error {
 		nrc.bgpServer.AddDefinedSet(clusterIPPrefixSet)
 	}
 
+	iBGPPeers := make([]string, 0)
 	if nrc.bgpEnableInternal {
 		// Get the current list of the nodes from the local cache
 		nodes := nrc.nodeLister.List()
-		iBGPPeers := make([]string, 0)
 		for _, node := range nodes {
 			nodeObj := node.(*v1core.Node)
 			nodeIP, err := utils.GetNodeIP(nodeObj)
 			if err != nil {
-				return fmt.Errorf("Failed to find a node IP: %s", err)
+				glog.Errorf("Failed to find a node IP and therefore cannot add internal BGP Peer: %v", err)
+				continue
 			}
 			iBGPPeers = append(iBGPPeers, nodeIP.String())
 		}
@@ -103,6 +99,17 @@ func (nrc *NetworkRoutingController) AddPolicies() error {
 		if err != nil {
 			nrc.bgpServer.AddDefinedSet(ns)
 		}
+	}
+
+	// a slice of all peers is used as a match condition for reject statement of clusteripprefixset import polcy
+	allBgpPeers := append(externalBgpPeers, iBGPPeers...)
+	ns, _ := table.NewNeighborSet(config.NeighborSet{
+		NeighborSetName:  "allpeerset",
+		NeighborInfoList: allBgpPeers,
+	})
+	err = nrc.bgpServer.ReplaceDefinedSet(ns)
+	if err != nil {
+		nrc.bgpServer.AddDefinedSet(ns)
 	}
 
 	err = nrc.addExportPolicies()
@@ -266,7 +273,7 @@ func (nrc *NetworkRoutingController) addExportPolicies() error {
 }
 
 // BGP import policies are added so that the following conditions are met:
-// - do not import Service VIPs at all, instead traffic to service VIPs should be sent to the gateway and ECMPed from there
+// - do not import Service VIPs advertised from any peers, instead each kube-router originates and injects Service VIPs into local rib.
 func (nrc *NetworkRoutingController) addImportPolicies() error {
 	statements := make([]config.Statement, 0)
 
@@ -274,6 +281,9 @@ func (nrc *NetworkRoutingController) addImportPolicies() error {
 		Conditions: config.Conditions{
 			MatchPrefixSet: config.MatchPrefixSet{
 				PrefixSet: "clusteripprefixset",
+			},
+			MatchNeighborSet: config.MatchNeighborSet{
+				NeighborSet: "allpeerset",
 			},
 		},
 		Actions: config.Actions{

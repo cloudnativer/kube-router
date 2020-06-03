@@ -43,9 +43,8 @@ spec:
       labels:
         k8s-app: kube-router
         tier: node
-      annotations:
-        scheduler.alpha.kubernetes.io/critical-pod: ''
     spec:
+      priorityClassName: system-node-critical
       serviceAccountName: kube-router
       containers:
       - name: kube-router
@@ -55,6 +54,7 @@ spec:
         - "--run-router=true"
         - "--run-firewall=true"
         - "--run-service-proxy=false"
+        - "--bgp-graceful-restart=true"
         env:
         - name: NODE_NAME
           valueFrom:
@@ -80,9 +80,12 @@ spec:
           readOnly: true
         - name: cni-conf-dir
           mountPath: /etc/cni/net.d
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+          readOnly: false
       initContainers:
       - name: install-cni
-        image: busybox
+        image: docker.io/cloudnativelabs/kube-router
         imagePullPolicy: Always
         command:
         - /bin/sh
@@ -100,7 +103,7 @@ spec:
         - mountPath: /etc/cni/net.d
           name: cni-conf-dir
         - mountPath: /etc/kube-router
-          name: kube-router-cfg       
+          name: kube-router-cfg
       hostNetwork: true
       tolerations:
       - key: CriticalAddonsOnly
@@ -121,6 +124,10 @@ spec:
       - name: kube-router-cfg
         configMap:
           name: kube-router-cfg
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate
 
 ---
 apiVersion: v1

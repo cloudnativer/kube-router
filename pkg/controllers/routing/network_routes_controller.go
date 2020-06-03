@@ -28,7 +28,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1core "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
@@ -63,52 +63,55 @@ const (
 
 // NetworkRoutingController is struct to hold necessary information required by controller
 type NetworkRoutingController struct {
-	nodeIP                  net.IP
-	nodeName                string
-	nodeSubnet              net.IPNet
-	nodeInterface           string
-	routerId                string
-	isIpv6                  bool
-	activeNodes             map[string]bool
-	mu                      sync.Mutex
-	clientset               kubernetes.Interface
-	bgpServer               *gobgp.BgpServer
-	syncPeriod              time.Duration
-	clusterCIDR             string
-	enablePodEgress         bool
-	hostnameOverride        string
-	advertiseClusterIP      bool
-	advertiseClusterSubnet	string
-	advertiseExternalIP     bool
-	advertiseLoadBalancerIP bool
-	advertisePodCidr        bool
-	defaultNodeAsnNumber    uint32
-	nodeAsnNumber           uint32
-	globalPeerRouters       []*config.Neighbor
-	nodePeerRouters         []string
-	enableCNI               bool
-	bgpFullMeshMode         bool
-	bgpEnableInternal       bool
-	bgpGracefulRestart      bool
-	ipSetHandler            *utils.IPSet
-	enableOverlays          bool
-	overlayType             string
-	peerMultihopTTL         uint8
-	MetricsEnabled          bool
-	bgpServerStarted        bool
-	bgpPort                 uint16
-	bgpRRClient             bool
-	bgpRRServer             bool
-	bgpClusterID            uint32
-	cniConfFile             string
-	disableSrcDstCheck      bool
-	initSrcDstCheckDone     bool
-	ec2IamAuthorized        bool
-	pathPrependAS           string
-	pathPrependCount        uint8
-	pathPrepend             bool
-	localAddressList        []string
-	overrideNextHop         bool
+	nodeIP                         net.IP
+	nodeName                       string
+	nodeSubnet                     net.IPNet
+	nodeInterface                  string
+	routerId                       string
+	isIpv6                         bool
+	activeNodes                    map[string]bool
+	mu                             sync.Mutex
+	clientset                      kubernetes.Interface
+	bgpServer                      *gobgp.BgpServer
+	syncPeriod                     time.Duration
+	clusterCIDR                    string
+	enablePodEgress                bool
+	hostnameOverride               string
+	advertiseClusterIP             bool
+	advertiseClusterSubnet         string
+	advertiseExternalIP            bool
+	advertiseLoadBalancerIP        bool
+	advertisePodCidr               bool
+	defaultNodeAsnNumber           uint32
+	nodeAsnNumber                  uint32
+	globalPeerRouters              []*config.Neighbor
+	nodePeerRouters                []string
+	enableCNI                      bool
+	bgpFullMeshMode                bool
+	bgpEnableInternal              bool
+	bgpGracefulRestart             bool
+	bgpGracefulRestartDeferralTime time.Duration
+	ipSetHandler                   *utils.IPSet
+	enableOverlays                 bool
+	overlayType                    string
+	peerMultihopTTL                uint8
+	MetricsEnabled                 bool
+	bgpServerStarted               bool
+	bgpHoldtime                    float64
+	bgpPort                        uint16
+	bgpRRClient                    bool
+	bgpRRServer                    bool
+	bgpClusterID                   uint32
+	cniConfFile                    string
+	disableSrcDstCheck             bool
+	initSrcDstCheckDone            bool
+	ec2IamAuthorized               bool
+	pathPrependAS                  string
+	pathPrependCount               uint8
+	pathPrepend                    bool
+	localAddressList               []string
+	overrideNextHop                bool
+	podCidr                        string
 
 	nodeLister cache.Indexer
 	svcLister  cache.Indexer
@@ -324,10 +327,7 @@ func (nrc *NetworkRoutingController) updateCNIConfig() {
 	cidrlen, _ := cidr.Mask.Size()
 	oldCidr := cidr.IP.String() + "/" + strconv.Itoa(cidrlen)
 
-	currentCidr, err := utils.GetPodCidrFromNodeSpec(nrc.clientset, nrc.hostnameOverride)
-	if err != nil {
-		glog.Fatalf("Failed to get pod CIDR from node spec. kube-router relies on kube-controller-manager to allocate pod CIDR for the node or an annotation `kube-router.io/pod-cidr`. Error: %v", err)
-	}
+	currentCidr := nrc.podCidr
 
 	if len(cidr.IP) == 0 || strings.Compare(oldCidr, currentCidr) != 0 {
 		err = utils.InsertPodCidrInCniSpec(nrc.cniConfFile, currentCidr)
@@ -366,12 +366,8 @@ func (nrc *NetworkRoutingController) advertisePodRoute() error {
 	if nrc.MetricsEnabled {
 		metrics.ControllerBGPadvertisementsSent.Inc()
 	}
-	cidr, err := utils.GetPodCidrFromNodeSpec(nrc.clientset, nrc.hostnameOverride)
-	if err != nil {
-		return err
-	}
 
-	cidrStr := strings.Split(cidr, "/")
+	cidrStr := strings.Split(nrc.podCidr, "/")
 	subnet := cidrStr[0]
 	cidrLen, _ := strconv.Atoi(cidrStr[1])
 	if nrc.isIpv6 {
@@ -473,11 +469,7 @@ func (nrc *NetworkRoutingController) injectRoute(path *table.Path) error {
 		}
 
 		out, err := exec.Command("ip", "route", "list", "table", customRouteTableID).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("Failed to verify if route already exists in %s table: %s",
-				customRouteTableName, err.Error())
-		}
-		if !strings.Contains(string(out), "dev "+tunnelName+" scope") {
+		if err != nil || !strings.Contains(string(out), "dev "+tunnelName+" scope") {
 			if out, err = exec.Command("ip", "route", "add", nexthop.String(), "dev", tunnelName, "table",
 				customRouteTableID).CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to add route in custom route table, err: %s, output: %s", err, string(out))
@@ -537,22 +529,21 @@ func (nrc *NetworkRoutingController) Cleanup() {
 }
 
 func (nrc *NetworkRoutingController) syncNodeIPSets() error {
+	var err error
 	start := time.Now()
 	defer func() {
 		if nrc.MetricsEnabled {
 			metrics.ControllerRoutesSyncTime.Observe(time.Since(start).Seconds())
 		}
 	}()
-	// Get the current list of the nodes from API server
-	nodes, err := nrc.clientset.CoreV1().Nodes().List(metav1.ListOptions{})
-	if err != nil {
-		return errors.New("Failed to list nodes from API server: " + err.Error())
-	}
+
+	nodes := nrc.nodeLister.List()
 
 	// Collect active PodCIDR(s) and NodeIPs from nodes
 	currentPodCidrs := make([]string, 0)
 	currentNodeIPs := make([]string, 0)
-	for _, node := range nodes.Items {
+	for _, obj := range nodes {
+		node := obj.(*v1core.Node)
 		podCIDR := node.GetAnnotations()["kube-router.io/pod-cidr"]
 		if podCIDR == "" {
 			podCIDR = node.Spec.PodCIDR
@@ -562,9 +553,10 @@ func (nrc *NetworkRoutingController) syncNodeIPSets() error {
 			continue
 		}
 		currentPodCidrs = append(currentPodCidrs, podCIDR)
-		nodeIP, err := utils.GetNodeIP(&node)
+		nodeIP, err := utils.GetNodeIP(node)
 		if err != nil {
-			return fmt.Errorf("Failed to find a node IP: %s", err)
+			glog.Errorf("Failed to find a node IP, cannot add to node ipset which could affect routing: %v", err)
+			continue
 		}
 		currentNodeIPs = append(currentNodeIPs, nodeIP.String())
 	}
@@ -812,7 +804,7 @@ func (nrc *NetworkRoutingController) startBgpServer() error {
 		}
 
 		// Create and set Global Peer Router complete configs
-		nrc.globalPeerRouters, err = newGlobalPeers(peerIPs, peerPorts, peerASNs, peerPasswords)
+		nrc.globalPeerRouters, err = newGlobalPeers(peerIPs, peerPorts, peerASNs, peerPasswords, nrc.bgpHoldtime)
 		if err != nil {
 			nrc.bgpServer.Stop()
 			return fmt.Errorf("Failed to process Global Peer Router configs: %s", err)
@@ -822,7 +814,7 @@ func (nrc *NetworkRoutingController) startBgpServer() error {
 	}
 
 	if len(nrc.globalPeerRouters) != 0 {
-		err := connectToExternalBGPPeers(nrc.bgpServer, nrc.globalPeerRouters, nrc.bgpGracefulRestart, nrc.peerMultihopTTL)
+		err := connectToExternalBGPPeers(nrc.bgpServer, nrc.globalPeerRouters, nrc.bgpGracefulRestart, nrc.bgpGracefulRestartDeferralTime, nrc.peerMultihopTTL)
 		if err != nil {
 			nrc.bgpServer.Stop()
 			return fmt.Errorf("Failed to peer with Global Peer Router(s): %s",
@@ -859,6 +851,7 @@ func NewNetworkRoutingController(clientset kubernetes.Interface,
 	nrc.enableCNI = kubeRouterConfig.EnableCNI
 	nrc.bgpEnableInternal = kubeRouterConfig.EnableiBGP
 	nrc.bgpGracefulRestart = kubeRouterConfig.BGPGracefulRestart
+	nrc.bgpGracefulRestartDeferralTime = kubeRouterConfig.BGPGracefulRestartDeferralTime
 	nrc.peerMultihopTTL = kubeRouterConfig.PeerMultihopTtl
 	nrc.enablePodEgress = kubeRouterConfig.EnablePodEgress
 	nrc.syncPeriod = kubeRouterConfig.RoutesSyncPeriod
@@ -870,7 +863,8 @@ func NewNetworkRoutingController(clientset kubernetes.Interface,
 	nrc.bgpServerStarted = false
 	nrc.disableSrcDstCheck = kubeRouterConfig.DisableSrcDstCheck
 	nrc.initSrcDstCheckDone = false
-        nrc.advertiseClusterSubnet = kubeRouterConfig.AdvertiseClusterSubnet
+	nrc.bgpHoldtime = kubeRouterConfig.BGPHoldtime
+	nrc.advertiseClusterSubnet = kubeRouterConfig.AdvertiseClusterSubnet
 
 	nrc.hostnameOverride = kubeRouterConfig.HostnameOverride
 	node, err := utils.GetNodeObject(clientset, nrc.hostnameOverride)
@@ -908,6 +902,13 @@ func NewNetworkRoutingController(clientset kubernetes.Interface,
 			return nil, errors.New("CNI conf file " + nrc.cniConfFile + " does not exist.")
 		}
 	}
+
+	cidr, err := utils.GetPodCidrFromNodeSpec(clientset, nrc.hostnameOverride)
+	if err != nil {
+		glog.Fatalf("Failed to get pod CIDR from node spec. kube-router relies on kube-controller-manager to allocate pod CIDR for the node or an annotation `kube-router.io/pod-cidr`. Error: %v", err)
+		return nil, fmt.Errorf("Failed to get pod CIDR details from Node.spec: %s", err.Error())
+	}
+	nrc.podCidr = cidr
 
 	nrc.ipSetHandler, err = utils.NewIPSet(nrc.isIpv6)
 	if err != nil {
@@ -968,8 +969,7 @@ func NewNetworkRoutingController(clientset kubernetes.Interface,
 		}
 	}
 
-	nrc.globalPeerRouters, err = newGlobalPeers(kubeRouterConfig.PeerRouters, peerPorts,
-		peerASNs, peerPasswords)
+	nrc.globalPeerRouters, err = newGlobalPeers(kubeRouterConfig.PeerRouters, peerPorts, peerASNs, peerPasswords, nrc.bgpHoldtime)
 	if err != nil {
 		return nil, fmt.Errorf("Error processing Global Peer Router configs: %s", err)
 	}

@@ -6,12 +6,13 @@ import (
 	"strconv"
 	"time"
 
+	"strings"
+
 	"github.com/golang/glog"
 	"github.com/osrg/gobgp/packet/bgp"
 	"github.com/osrg/gobgp/table"
 	v1core "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
-	"strings"
 )
 
 // bgpAdvertiseVIP advertises the service vip (cluster ip or load balancer ip or external IP) the configured peers
@@ -22,35 +23,34 @@ func (nrc *NetworkRoutingController) bgpAdvertiseVIP(vip string) error {
 		bgp.NewPathAttributeNextHop(nrc.nodeIP.String()),
 	}
 
-	//If the value of advertise-svc-cidr parameter is not empty, then the value of advertise-svc-cidr parameter is put into RIB, otherwise it will be done according to the original rules.
-        var svcSubnet = vip
-        var svcCidrLen = 32
-        if len(nrc.advertiseClusterSubnet) != 0 {
-                svcCidrStr := strings.Split(nrc.advertiseClusterSubnet, "/")
-                svcSubnet = svcCidrStr[0]
-                svcCidrLen, _ = strconv.Atoi(svcCidrStr[1])
-        }
-        glog.V(2).Infof("Advertising route: '%s/%s via %s' to peers", svcSubnet, strconv.Itoa(svcCidrLen), nrc.nodeIP.String())
-        _, err := nrc.bgpServer.AddPath("", []*table.Path{table.NewPath(nil, bgp.NewIPAddrPrefix(uint8(svcCidrLen),
-                svcSubnet), false, attrs, time.Now(), false)})
+	//If the value of advertise-cluster-subnet parameter is not empty, then the value of advertise-cluster-subnet parameter is put into RIB, otherwise it will be done according to the original rules.
+	var svcSubnet = vip
+	var svcCidrLen = 32
+	if len(nrc.advertiseClusterSubnet) != 0 {
+		svcCidrStr := strings.Split(nrc.advertiseClusterSubnet, "/")
+		svcSubnet = svcCidrStr[0]
+		svcCidrLen, _ = strconv.Atoi(svcCidrStr[1])
+	}
+	glog.V(2).Infof("Advertising route: '%s/%s via %s' to peers", svcSubnet, strconv.Itoa(svcCidrLen), nrc.nodeIP.String())
+	_, err := nrc.bgpServer.AddPath("", []*table.Path{table.NewPath(nil, bgp.NewIPAddrPrefix(uint8(svcCidrLen),
+		svcSubnet), false, attrs, time.Now(), false)})
 
 	return err
 }
 
 // bgpWithdrawVIP  unadvertises the service vip
 func (nrc *NetworkRoutingController) bgpWithdrawVIP(vip string) error {
-	glog.V(2).Infof("Withdrawing route: '%s/%s via %s' to peers", vip, strconv.Itoa(32), nrc.nodeIP.String())
 
-	//If the value of the advertise-svc-cidr parameter is not empty, no operation will be performed, otherwise the original rules will be followed.
-        var err error
-        if len(nrc.advertiseClusterSubnet) == 0 {
-                glog.V(2).Infof("Withdrawing route: '%s/%s via %s' to peers", vip, strconv.Itoa(32), nrc.nodeIP.String())
-                pathList := []*table.Path{table.NewPath(nil, bgp.NewIPAddrPrefix(uint8(32),
-                        vip), true, nil, time.Now(), false)}
-                err = nrc.bgpServer.DeletePath([]byte(nil), 0, "", pathList)
-        } else {
-                err = nil
-        }
+	//If the value of the advertise-cluster-subnet parameter is not empty, no operation will be performed, otherwise the original rules will be followed.
+	var err error
+	if len(nrc.advertiseClusterSubnet) == 0 {
+		glog.V(2).Infof("Withdrawing route: '%s/%s via %s' to peers", vip, strconv.Itoa(32), nrc.nodeIP.String())
+		pathList := []*table.Path{table.NewPath(nil, bgp.NewIPAddrPrefix(uint8(32),
+			vip), true, nil, time.Now(), false)}
+		err = nrc.bgpServer.DeletePath([]byte(nil), 0, "", pathList)
+	} else {
+		err = nil
+	}
 
 	return err
 }
@@ -116,11 +116,60 @@ func (nrc *NetworkRoutingController) handleServiceUpdate(svc *v1core.Service) {
 	nrc.withdrawVIPs(toWithdraw)
 }
 
+func (nrc *NetworkRoutingController) handleServiceDelete(svc *v1core.Service) {
+
+	if !nrc.bgpServerStarted {
+		glog.V(3).Infof("Skipping update to service: %s/%s, controller still performing bootup full-sync", svc.Namespace, svc.Name)
+		return
+	}
+
+	err := nrc.AddPolicies()
+	if err != nil {
+		glog.Errorf("Error adding BGP policies: %s", err.Error())
+	}
+
+	activeVIPs, _, err := nrc.getActiveVIPs()
+	if err != nil {
+		glog.Errorf("Failed to get active VIP's on service delete event due to: %s", err.Error())
+		return
+	}
+	activeVIPsMap := make(map[string]bool)
+	for _, activeVIP := range activeVIPs {
+		activeVIPsMap[activeVIP] = true
+	}
+	serviceVIPs := nrc.getAllVIPsForService(svc)
+	withdrawVIPs := make([]string, 0)
+	for _, serviceVIP := range serviceVIPs {
+		// withdraw VIP only if deleted service is the last service using the VIP
+		if !activeVIPsMap[serviceVIP] {
+			withdrawVIPs = append(withdrawVIPs, serviceVIP)
+		}
+	}
+	nrc.withdrawVIPs(withdrawVIPs)
+
+}
+
 func (nrc *NetworkRoutingController) tryHandleServiceUpdate(obj interface{}, logMsgFormat string) {
 	if svc := getServiceObject(obj); svc != nil {
 		glog.V(1).Infof(logMsgFormat, svc.Namespace, svc.Name)
 		nrc.handleServiceUpdate(svc)
 	}
+}
+
+func (nrc *NetworkRoutingController) tryHandleServiceDelete(obj interface{}, logMsgFormat string) {
+	svc, ok := obj.(*v1core.Service)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			glog.Errorf("unexpected object type: %v", obj)
+			return
+		}
+		if svc, ok = tombstone.Obj.(*v1core.Service); !ok {
+			glog.Errorf("unexpected object type: %v", obj)
+			return
+		}
+	}
+	nrc.handleServiceDelete(svc)
 }
 
 // OnServiceCreate handles new service create event from the kubernetes API server
@@ -154,7 +203,7 @@ func getMissingPrevGen(old, new []string) (withdrawIPs []string) {
 
 // OnServiceDelete handles the service delete updates from the kubernetes API server
 func (nrc *NetworkRoutingController) OnServiceDelete(obj interface{}) {
-	nrc.tryHandleServiceUpdate(obj, "Received event to delete service: %s/%s from watch API")
+	nrc.tryHandleServiceDelete(obj, "Received event to delete service: %s/%s from watch API")
 }
 
 func (nrc *NetworkRoutingController) newEndpointsEventHandler() cache.ResourceEventHandler {
@@ -319,24 +368,38 @@ func (nrc *NetworkRoutingController) shouldAdvertiseService(svc *v1core.Service,
 }
 
 func (nrc *NetworkRoutingController) getVIPsForService(svc *v1core.Service, onlyActiveEndpoints bool) ([]string, []string, error) {
-	ipList := make([]string, 0)
-	var err error
 
-	nodeHasEndpoints := true
-	if onlyActiveEndpoints {
-		_, isLocal := svc.Annotations[svcLocalAnnotation]
-		if isLocal || svc.Spec.ExternalTrafficPolicy == v1core.ServiceExternalTrafficPolicyTypeLocal {
-			nodeHasEndpoints, err = nrc.nodeHasEndpointsForService(svc)
-			if err != nil {
-				return nil, nil, err
-			}
+	advertise := true
+
+	_, hasLocalAnnotation := svc.Annotations[svcLocalAnnotation]
+	hasLocalTrafficPolicy := svc.Spec.ExternalTrafficPolicy == v1core.ServiceExternalTrafficPolicyTypeLocal
+	isLocal := hasLocalAnnotation || hasLocalTrafficPolicy
+
+	if onlyActiveEndpoints && isLocal {
+		var err error
+		advertise, err = nrc.nodeHasEndpointsForService(svc)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 
+	ipList := nrc.getAllVIPsForService(svc)
+
+	if !advertise {
+		return nil, ipList, nil
+	}
+
+	return ipList, nil, nil
+}
+
+func (nrc *NetworkRoutingController) getAllVIPsForService(svc *v1core.Service) []string {
+
+	ipList := make([]string, 0)
+
 	if nrc.shouldAdvertiseService(svc, svcAdvertiseClusterAnnotation, nrc.advertiseClusterIP) {
-		clusterIp := nrc.getClusterIp(svc)
-		if clusterIp != "" {
-			ipList = append(ipList, clusterIp)
+		clusterIP := nrc.getClusterIp(svc)
+		if clusterIP != "" {
+			ipList = append(ipList, clusterIP)
 		}
 	}
 
@@ -351,11 +414,8 @@ func (nrc *NetworkRoutingController) getVIPsForService(svc *v1core.Service, only
 		ipList = append(ipList, nrc.getLoadBalancerIps(svc)...)
 	}
 
-	if !nodeHasEndpoints {
-		return nil, ipList, nil
-	}
+	return ipList
 
-	return ipList, nil, nil
 }
 
 func isEndpointsForLeaderElection(ep *v1core.Endpoints) bool {
@@ -388,8 +448,14 @@ func (nrc *NetworkRoutingController) nodeHasEndpointsForService(svc *v1core.Serv
 
 	for _, subset := range ep.Subsets {
 		for _, address := range subset.Addresses {
-			if *address.NodeName == nrc.nodeName {
-				return true, nil
+			if address.NodeName != nil {
+				if *address.NodeName == nrc.nodeName {
+					return true, nil
+				}
+			} else {
+				if address.IP == nrc.nodeIP.String() {
+					return true, nil
+				}
 			}
 		}
 	}

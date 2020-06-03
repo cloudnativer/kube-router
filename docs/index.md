@@ -18,7 +18,6 @@ The documentation is divided into the following sections:
     - [Troubleshooting](troubleshoot.md)
     - [Pod toolbox](pod-toolbox.md)
     - [Upgrades](upgrading.md)
-    - [Large-scale networks](large-networks01.md)
 - Developer and Contributor Guide
     - [developer guide](developing.md)
     - [Contributor Guideline](/CONTRIBUTING.md)

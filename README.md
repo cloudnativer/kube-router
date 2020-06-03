@@ -1,10 +1,14 @@
+![logo](https://cdn.rawgit.com/cloudnativelabs/kube-router/64f7700e/Documentation/img/logo-full.svg)
 
-![avatar](docs/img/kube-router-logo.jpg)
+[![Build Status](https://travis-ci.org/cloudnativelabs/kube-router.svg?branch=master)](https://travis-ci.org/cloudnativelabs/kube-router)
+[![Slack](https://img.shields.io/badge/slack-join%20chat%20%E2%86%92-e01563.svg)](https://kubernetes.slack.com/messages/C8DCQGTSB/)
+[![Docker Pulls kube-router](https://img.shields.io/docker/pulls/cloudnativelabs/kube-router.svg?label=docker+pulls)](https://hub.docker.com/r/cloudnativelabs/kube-router/)
+[![](https://images.microbadger.com/badges/image/cloudnativelabs/kube-router.svg)](https://microbadger.com/images/cloudnativelabs/kube-router "Get your own image badge on microbadger.com")
+[![](https://img.shields.io/github/release/cloudnativelabs/kube-router/all.svg?style=flat-square)](https://github.com/cloudnativelabs/kube-router/releases)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-<br>
-Kube-router is a turnkey solution for Kubernetes networking with aim to provide operational simplicity and high performance.<br>
-This is an optimized Kube-router, which can support large-scale kubernetes network.
-<br>
+Kube-router is a turnkey solution for Kubernetes networking with aim to provide operational simplicity and high performance.
+
 ## Primary Features
 
 *kube-router does it all.*
@@ -120,17 +124,3 @@ Kube-router build upon following libraries:
 - Netlink: https://github.com/vishvananda/netlink
 - Ipset: https://github.com/janeczku/go-ipset
 - IPVS: https://github.com/docker/libnetwork/
-
-## Sponsorships
-
-E2E Tests sponsored by [DigitalOcean](https://www.digitalocean.com/about/)
-
-<p align="left">
-  <img src="docs/img/do_logo_blue.png"> </image>
-</p>
-
-Testing and development by [ShopGun](https://shopgun.com/about)
-
-<p align="left">
-  <img height="90" src="docs/img/shopgun_logo.png"> </image>
-</p>

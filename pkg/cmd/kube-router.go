@@ -17,11 +17,12 @@ import (
 	"github.com/cloudnativelabs/kube-router/pkg/options"
 	"github.com/golang/glog"
 
+	"time"
+
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"time"
 )
 
 // These get set at build time via -ldflags magic
@@ -127,22 +128,14 @@ func (kr *KubeRouter) Run() error {
 		kr.Config.MetricsEnabled = false
 	}
 
-	if kr.Config.RunFirewall {
-		npc, err := netpol.NewNetworkPolicyController(kr.Client,
-			kr.Config, podInformer, npInformer, nsInformer)
-		if err != nil {
-			return errors.New("Failed to create network policy controller: " + err.Error())
+	if kr.Config.BGPGracefulRestart {
+		if kr.Config.BGPGracefulRestartTime > time.Second*4095 {
+			return errors.New("BGPGracefuleRestartTime should be less than 4095 seconds")
+		}
+		if kr.Config.BGPGracefulRestartTime <= 0 {
+			return errors.New("BGPGracefuleRestartTime must be positive")
 		}
 
-		podInformer.AddEventHandler(npc.PodEventHandler)
-		nsInformer.AddEventHandler(npc.NamespaceEventHandler)
-		npInformer.AddEventHandler(npc.NetworkPolicyEventHandler)
-
-		wg.Add(1)
-		go npc.Run(healthChan, stopCh, &wg)
-	}
-
-	if kr.Config.BGPGracefulRestart {
 		if kr.Config.BGPGracefulRestartDeferralTime > time.Hour*18 {
 			return errors.New("BGPGracefuleRestartDeferralTime should be less than 18 hours")
 		}
@@ -177,10 +170,32 @@ func (kr *KubeRouter) Run() error {
 
 		wg.Add(1)
 		go nsc.Run(healthChan, stopCh, &wg)
+
+		// wait for the proxy firewall rules to be setup before network policies
+		if kr.Config.RunFirewall {
+			nsc.ProxyFirewallSetup.L.Lock()
+			nsc.ProxyFirewallSetup.Wait()
+			nsc.ProxyFirewallSetup.L.Unlock()
+		}
+	}
+
+	if kr.Config.RunFirewall {
+		npc, err := netpol.NewNetworkPolicyController(kr.Client,
+			kr.Config, podInformer, npInformer, nsInformer)
+		if err != nil {
+			return errors.New("Failed to create network policy controller: " + err.Error())
+		}
+
+		podInformer.AddEventHandler(npc.PodEventHandler)
+		nsInformer.AddEventHandler(npc.NamespaceEventHandler)
+		npInformer.AddEventHandler(npc.NetworkPolicyEventHandler)
+
+		wg.Add(1)
+		go npc.Run(healthChan, stopCh, &wg)
 	}
 
 	// Handle SIGINT and SIGTERM
-	ch := make(chan os.Signal)
+	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
 
@@ -211,7 +226,7 @@ func PrintVersion(logOutput bool) {
 	output := fmt.Sprintf("Running %v version %s, built on %s, %s\n", os.Args[0], version, buildDate, runtime.Version())
 
 	if !logOutput {
-		fmt.Fprintf(os.Stderr, output)
+		fmt.Fprintf(os.Stderr, "%s", output)
 	} else {
 		glog.Info(output)
 	}

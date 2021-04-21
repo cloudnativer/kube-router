@@ -2,13 +2,14 @@ package netpol
 
 import (
 	"context"
-	netv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/tools/cache"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	netv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/tools/cache"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,8 @@ import (
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/cloudnativelabs/kube-router/pkg/options"
 )
 
 // newFakeInformersFromClient creates the different informers used in the uneventful network policy controller
@@ -146,15 +149,15 @@ func tCreateFakePods(t *testing.T, podInformer cache.SharedIndexInformer, nsInfo
 		{name: "nsC", labels: labels.Set{"name": "c"}},
 		{name: "nsD", labels: labels.Set{"name": "d"}},
 	}
-	ips_used := make(map[string]bool)
+	ipsUsed := make(map[string]bool)
 	for _, pod := range pods {
 		podNamespaceMap.addPod(pod)
 		ipaddr := "1.1." + pod.ip
-		if ips_used[ipaddr] {
+		if ipsUsed[ipaddr] {
 			t.Fatalf("there is another pod with the same Ip address %s as this pod %s namespace %s",
 				ipaddr, pod.name, pod.name)
 		}
-		ips_used[ipaddr] = true
+		ipsUsed[ipaddr] = true
 		tAddToInformerStore(t, podInformer,
 			&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: pod.name, Labels: pod.labels, Namespace: pod.namespace},
 				Status: v1.PodStatus{PodIP: ipaddr}})
@@ -186,7 +189,6 @@ func newUneventfulNetworkPolicyController(podInformer cache.SharedIndexInformer,
 	npc := NetworkPolicyController{}
 	npc.syncPeriod = time.Hour
 
-	npc.v1NetworkPolicy = true
 	npc.nodeHostName = "node"
 	npc.nodeIP = net.IPv4(10, 10, 10, 10)
 	npc.podLister = podInformer.GetIndexer()
@@ -243,6 +245,30 @@ func testForMissingOrUnwanted(t *testing.T, targetMsg string, got []podInfo, wan
 	if missing := tGetNotTargetedPods(got, wanted); len(missing) != 0 {
 		t.Errorf("Some Pods NOT expected were selected on %s: %s", targetMsg, strings.Join(missing, ", "))
 	}
+}
+
+func newMinimalKubeRouterConfig(clusterIPCIDR string, nodePortRange string, hostNameOverride string, externalIPs []string) *options.KubeRouterConfig {
+	kubeConfig := options.NewKubeRouterConfig()
+	if clusterIPCIDR != "" {
+		kubeConfig.ClusterIPCIDR = clusterIPCIDR
+	}
+	if nodePortRange != "" {
+		kubeConfig.NodePortRange = nodePortRange
+	}
+	if hostNameOverride != "" {
+		kubeConfig.HostnameOverride = hostNameOverride
+	}
+	if externalIPs != nil {
+		kubeConfig.ExternalIPCIDRs = externalIPs
+	}
+	return kubeConfig
+}
+
+type tNetPolConfigTestCase struct {
+	name        string
+	config      *options.KubeRouterConfig
+	expectError bool
+	errorText   string
 }
 
 func TestNewNetworkPolicySelectors(t *testing.T) {
@@ -364,6 +390,151 @@ func TestNewNetworkPolicySelectors(t *testing.T) {
 			}
 			for _, egress := range np.egressRules {
 				testForMissingOrUnwanted(t, "egress dstPods", egress.dstPods, test.outDestPods)
+			}
+		})
+	}
+}
+
+func TestNetworkPolicyController(t *testing.T) {
+	testCases := []tNetPolConfigTestCase{
+		{
+			"Default options are successful",
+			newMinimalKubeRouterConfig("", "", "node", nil),
+			false,
+			"",
+		},
+		{
+			"Missing nodename fails appropriately",
+			newMinimalKubeRouterConfig("", "", "", nil),
+			true,
+			"Failed to identify the node by NODE_NAME, hostname or --hostname-override",
+		},
+		{
+			"Test bad cluster CIDR (not properly formatting ip address)",
+			newMinimalKubeRouterConfig("10.10.10", "", "node", nil),
+			true,
+			"failed to get parse --service-cluster-ip-range parameter: invalid CIDR address: 10.10.10",
+		},
+		{
+			"Test bad cluster CIDR (not using an ip address)",
+			newMinimalKubeRouterConfig("foo", "", "node", nil),
+			true,
+			"failed to get parse --service-cluster-ip-range parameter: invalid CIDR address: foo",
+		},
+		{
+			"Test bad cluster CIDR (using an ip address that is not a CIDR)",
+			newMinimalKubeRouterConfig("10.10.10.10", "", "node", nil),
+			true,
+			"failed to get parse --service-cluster-ip-range parameter: invalid CIDR address: 10.10.10.10",
+		},
+		{
+			"Test good cluster CIDR (using single IP with a /32)",
+			newMinimalKubeRouterConfig("10.10.10.10/32", "", "node", nil),
+			false,
+			"",
+		},
+		{
+			"Test good cluster CIDR (using normal range with /24)",
+			newMinimalKubeRouterConfig("10.10.10.0/24", "", "node", nil),
+			false,
+			"",
+		},
+		{
+			"Test bad node port specification (using commas)",
+			newMinimalKubeRouterConfig("", "8080,8081", "node", nil),
+			true,
+			"failed to parse node port range given: '8080,8081' please see specification in help text",
+		},
+		{
+			"Test bad node port specification (not using numbers)",
+			newMinimalKubeRouterConfig("", "foo:bar", "node", nil),
+			true,
+			"failed to parse node port range given: 'foo:bar' please see specification in help text",
+		},
+		{
+			"Test bad node port specification (using anything in addition to range)",
+			newMinimalKubeRouterConfig("", "8080,8081-8090", "node", nil),
+			true,
+			"failed to parse node port range given: '8080,8081-8090' please see specification in help text",
+		},
+		{
+			"Test bad node port specification (using reversed range)",
+			newMinimalKubeRouterConfig("", "8090-8080", "node", nil),
+			true,
+			"port 1 is greater than or equal to port 2 in range given: '8090-8080'",
+		},
+		{
+			"Test bad node port specification (port out of available range)",
+			newMinimalKubeRouterConfig("", "132000-132001", "node", nil),
+			true,
+			"could not parse first port number from range given: '132000-132001'",
+		},
+		{
+			"Test good node port specification (using colon separator)",
+			newMinimalKubeRouterConfig("", "8080:8090", "node", nil),
+			false,
+			"",
+		},
+		{
+			"Test good node port specification (using hyphen separator)",
+			newMinimalKubeRouterConfig("", "8080-8090", "node", nil),
+			false,
+			"",
+		},
+		{
+			"Test bad external IP CIDR (not properly formatting ip address)",
+			newMinimalKubeRouterConfig("", "", "node", []string{"199.10.10"}),
+			true,
+			"failed to get parse --service-external-ip-range parameter: '199.10.10'. Error: invalid CIDR address: 199.10.10",
+		},
+		{
+			"Test bad external IP CIDR (not using an ip address)",
+			newMinimalKubeRouterConfig("", "", "node", []string{"foo"}),
+			true,
+			"failed to get parse --service-external-ip-range parameter: 'foo'. Error: invalid CIDR address: foo",
+		},
+		{
+			"Test bad external IP CIDR (using an ip address that is not a CIDR)",
+			newMinimalKubeRouterConfig("", "", "node", []string{"199.10.10.10"}),
+			true,
+			"failed to get parse --service-external-ip-range parameter: '199.10.10.10'. Error: invalid CIDR address: 199.10.10.10",
+		},
+		{
+			"Test bad external IP CIDR (making sure that it processes all items in the list)",
+			newMinimalKubeRouterConfig("", "", "node", []string{"199.10.10.10/32", "199.10.10.11"}),
+			true,
+			"failed to get parse --service-external-ip-range parameter: '199.10.10.11'. Error: invalid CIDR address: 199.10.10.11",
+		},
+		{
+			"Test good external IP CIDR (using single IP with a /32)",
+			newMinimalKubeRouterConfig("", "", "node", []string{"199.10.10.10/32"}),
+			false,
+			"",
+		},
+		{
+			"Test good external IP CIDR (using normal range with /24)",
+			newMinimalKubeRouterConfig("", "", "node", []string{"199.10.10.10/24"}),
+			false,
+			"",
+		},
+	}
+	client := fake.NewSimpleClientset(&v1.NodeList{Items: []v1.Node{*newFakeNode("node", "10.10.10.10")}})
+	_, podInformer, nsInformer, netpolInformer := newFakeInformersFromClient(client)
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewNetworkPolicyController(client, test.config, podInformer, netpolInformer, nsInformer)
+			if err == nil && test.expectError {
+				t.Error("This config should have failed, but it was successful instead")
+			} else if err != nil {
+				// Unfortunately without doing a ton of extra refactoring work, we can't remove this reference easily
+				// from the controllers start up. Luckily it's one of the last items to be processed in the controller
+				// so for now we'll consider that if we hit this error that we essentially didn't hit an error at all
+				// TODO: refactor NPC to use an injectable interface for ipset operations
+				if !test.expectError && err.Error() != "Ipset utility not found" {
+					t.Errorf("This config should have been successful, but it failed instead. Error: %s", err)
+				} else if test.expectError && err.Error() != test.errorText {
+					t.Errorf("Expected error: '%s' but instead got: '%s'", test.errorText, err)
+				}
 			}
 		})
 	}

@@ -35,6 +35,7 @@ func stringSliceToIPs(s []string) ([]net.IP, error) {
 	return ips, nil
 }
 
+/* unused
 func stringSliceToUInt16(s []string) ([]uint16, error) {
 	ints := make([]uint16, 0)
 	for _, intString := range s {
@@ -46,6 +47,7 @@ func stringSliceToUInt16(s []string) ([]uint16, error) {
 	}
 	return ints, nil
 }
+*/
 
 func stringSliceToUInt32(s []string) ([]uint32, error) {
 	ints := make([]uint32, 0)
@@ -99,7 +101,7 @@ func ipv6IsEnabled() bool {
 	return true
 }
 
-func getNodeSubnet(nodeIp net.IP) (net.IPNet, string, error) {
+func getNodeSubnet(nodeIP net.IP) (net.IPNet, string, error) {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return net.IPNet{}, "", errors.New("Failed to get list of links")
@@ -110,12 +112,35 @@ func getNodeSubnet(nodeIp net.IP) (net.IPNet, string, error) {
 			return net.IPNet{}, "", errors.New("Failed to get list of addr")
 		}
 		for _, addr := range addresses {
-			if addr.IPNet.IP.Equal(nodeIp) {
+			if addr.IPNet.IP.Equal(nodeIP) {
 				return *addr.IPNet, link.Attrs().Name, nil
 			}
 		}
 	}
 	return net.IPNet{}, "", errors.New("Failed to find interface with specified node ip")
+}
+
+func getMTUFromNodeIP(nodeIP net.IP, overlayEnabled bool) (int, error) {
+	links, err := netlink.LinkList()
+	if err != nil {
+		return 0, errors.New("Failed to get list of links")
+	}
+	for _, link := range links {
+		addresses, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+		if err != nil {
+			return 0, errors.New("Failed to get list of addr")
+		}
+		for _, addr := range addresses {
+			if addr.IPNet.IP.Equal(nodeIP) {
+				linkMTU := link.Attrs().MTU
+				if overlayEnabled {
+					return linkMTU - 20, nil // -20 to accommodate IPIP header
+				}
+				return linkMTU, nil
+			}
+		}
+	}
+	return 0, errors.New("Failed to find interface with specified node ip")
 }
 
 // generateTunnelName will generate a name for a tunnel interface given a node IP

@@ -3,22 +3,24 @@ GOARCH?=$(shell go env GOARCH)
 DEV_SUFFIX?=-git
 OSX=$(filter Darwin,$(shell uname))
 BUILD_DATE?=$(shell date +%Y-%m-%dT%H:%M:%S%z)
+REGISTRY_DATE?=$(shell date +%Y%m%d)
 LOCAL_PACKAGES?=app app/controllers app/options app/watchers utils
 IMG_NAMESPACE?=cloudnativelabs
 GIT_COMMIT=$(shell git describe --tags --dirty)
 GIT_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
-IMG_TAG?=$(if $(IMG_TAG_PREFIX),$(IMG_TAG_PREFIX)-)$(if $(ARCH_TAG_PREFIX),$(ARCH_TAG_PREFIX)-)$(GIT_BRANCH)
+IMG_TAG?=1.1.1-$(REGISTRY_DATE)
 MANIFEST_TAG?=$(if $(IMG_TAG_PREFIX),$(IMG_TAG_PREFIX)-)$(GIT_BRANCH)
 RELEASE_TAG?=$(GOARCH)-$(shell build/get-git-tag.sh)
 REGISTRY?=$(if $(IMG_FQDN),$(IMG_FQDN)/$(IMG_NAMESPACE)/$(NAME),$(IMG_NAMESPACE)/$(NAME))
-REGISTRY_DEV?=$(REGISTRY)$(DEV_SUFFIX)
+REGISTRY_DEV=cloudnativer/kuberouter
 IN_DOCKER_GROUP=$(filter docker,$(shell groups))
 IS_ROOT=$(filter 0,$(shell id -u))
 DOCKER=$(if $(or $(IN_DOCKER_GROUP),$(IS_ROOT),$(OSX)),docker,sudo docker)
 MAKEFILE_DIR=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 UPSTREAM_IMPORT_PATH=$(GOPATH)/src/github.com/cloudnativelabs/kube-router/
 BUILD_IN_DOCKER?=true
-DOCKER_BUILD_IMAGE?=golang:1.10.8-alpine3.9
+DOCKER_BUILD_IMAGE?=golang:1.15.5-alpine3.12
+DOCKER_LINT_IMAGE?=golangci/golangci-lint:v1.27.0
 QEMU_IMAGE?=multiarch/qemu-user-static
 ifeq ($(GOARCH), arm)
 ARCH_TAG_PREFIX=$(GOARCH)
@@ -47,22 +49,30 @@ all: test kube-router container ## Default target. Runs tests, builds binaries a
 kube-router:
 ifeq "$(BUILD_IN_DOCKER)" "true"
 	@echo Starting kube-router binary build.
-	$(DOCKER) run -v $(PWD):/go/src/github.com/cloudnativelabs/kube-router -w /go/src/github.com/cloudnativelabs/kube-router $(DOCKER_BUILD_IMAGE) \
+	$(DOCKER) run --network host -v $(PWD):/go/src/github.com/cloudnativelabs/kube-router -w /go/src/github.com/cloudnativelabs/kube-router $(DOCKER_BUILD_IMAGE) \
 	    sh -c ' \
-	    GOARCH=$(GOARCH) CGO_ENABLED=0 go build \
+	    GOARCH=$(GOARCH) CGO_ENABLED=0 go build -mod vendor \
 		-ldflags "-X github.com/cloudnativelabs/kube-router/pkg/cmd.version=$(GIT_COMMIT) -X github.com/cloudnativelabs/kube-router/pkg/cmd.buildDate=$(BUILD_DATE)" \
 		-o kube-router cmd/kube-router/kube-router.go'
 	@echo Finished kube-router binary build.
 else
-	GOARCH=$(GOARCH) CGO_ENABLED=0 go build -ldflags '-X github.com/cloudnativelabs/kube-router/pkg/cmd.version=$(GIT_COMMIT) -X github.com/cloudnativelabs/kube-router/pkg/cmd.buildDate=$(BUILD_DATE)' -o kube-router cmd/kube-router/kube-router.go
+	GOARCH=$(GOARCH) CGO_ENABLED=0 go build -mod vendor -ldflags '-X github.com/cloudnativelabs/kube-router/pkg/cmd.version=$(GIT_COMMIT) -X github.com/cloudnativelabs/kube-router/pkg/cmd.buildDate=$(BUILD_DATE)' -o kube-router cmd/kube-router/kube-router.go
 endif
 
-test: gofmt ## Runs code quality pipelines (gofmt, tests, coverage, lint, etc)
+test: gofmt ## Runs code quality pipelines (gofmt, tests, coverage, etc)
 ifeq "$(BUILD_IN_DOCKER)" "true"
 	$(DOCKER) run -v $(PWD):/go/src/github.com/cloudnativelabs/kube-router -w /go/src/github.com/cloudnativelabs/kube-router $(DOCKER_BUILD_IMAGE) \
-	    sh -c 'go test -v -timeout 30s github.com/cloudnativelabs/kube-router/cmd/kube-router/ github.com/cloudnativelabs/kube-router/pkg/...'
+	    sh -c 'CGO_ENABLED=0 go test -mod vendor -v -timeout 30s github.com/cloudnativelabs/kube-router/cmd/kube-router/ github.com/cloudnativelabs/kube-router/pkg/...'
 else
-		go test -v -timeout 30s github.com/cloudnativelabs/kube-router/cmd/kube-router/ github.com/cloudnativelabs/kube-router/pkg/...
+		go test -mod vendor -v -timeout 30s github.com/cloudnativelabs/kube-router/cmd/kube-router/ github.com/cloudnativelabs/kube-router/pkg/...
+endif
+
+lint: gofmt
+ifeq "$(BUILD_IN_DOCKER)" "true"
+	$(DOCKER) run -v $(PWD):/go/src/github.com/cloudnativelabs/kube-router -w /go/src/github.com/cloudnativelabs/kube-router $(DOCKER_LINT_IMAGE) \
+	     sh -c 'golangci-lint run ./...'
+else
+	golangci-lint run ./...
 endif
 
 vagrant-up: export docker=$(DOCKER)
@@ -98,7 +108,7 @@ container: Dockerfile.$(GOARCH).run kube-router gobgp multiarch-binverify ## Bui
 	    echo "Using qemu to build non-native container"; \
 	    $(DOCKER) run --rm --privileged $(QEMU_IMAGE) --reset -p yes; \
 	fi
-	$(DOCKER) build -t "$(REGISTRY_DEV):$(IMG_TAG)" -f Dockerfile.$(GOARCH).run .
+	$(DOCKER) build --network=host -t "$(REGISTRY_DEV):$(subst /,,$(IMG_TAG))" -f Dockerfile.$(GOARCH).run .
 	@if [ "$(GIT_BRANCH)" = "master" ]; then \
 	    $(DOCKER) tag "$(REGISTRY_DEV):$(IMG_TAG)" "$(REGISTRY_DEV)"; \
 	fi
@@ -157,7 +167,7 @@ github-release:
 	@echo Starting kube-router GitHub release creation.
 	@[ -n "$(value GITHUB_TOKEN)" ] && \
 	  GITHUB_TOKEN=$(value GITHUB_TOKEN); \
-	  curl -sL https://git.io/goreleaser | bash
+	  curl -sL https://git.io/goreleaser | VERSION=v0.142.0 bash
 	@echo Finished kube-router GitHub release creation.
 
 release: push-release github-release ## Pushes a release to DockerHub and GitHub
@@ -230,14 +240,12 @@ endif
 gobgp:
 ifeq "$(BUILD_IN_DOCKER)" "true"
 	@echo Building gobgp
-	$(DOCKER) run -v $(PWD)/vendor:/go/src -w /go/src/github.com/osrg/gobgp/gobgp $(DOCKER_BUILD_IMAGE) \
-    sh -c 'GOARCH=$(GOARCH) CGO_ENABLED=0 go build -o gobgp'
+	$(DOCKER) run --network host -v $(PWD):/go/src/github.com/cloudnativelabs/kube-router -w /go/src/github.com/cloudnativelabs/kube-router $(DOCKER_BUILD_IMAGE) \
+    sh -c 'apk add git --no-cache && GOARCH=$(GOARCH) CGO_ENABLED=0 go build -mod vendor -o gobgp github.com/osrg/gobgp/cmd/gobgp'
 	@echo Finished building gobgp.
 else
-	cd vendor/github.com/osrg/gobgp/gobgp && \
-	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -o gobgp
+	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -mod vendor -o gobgp github.com/osrg/gobgp/cmd/gobgp
 endif
-	cp -f vendor/github.com/osrg/gobgp/gobgp/gobgp gobgp
 
 multiarch-binverify:
 	@echo 'Verifying kube-router gobgp for ARCH=$(FILE_ARCH) ...'
@@ -264,7 +272,7 @@ ifeq (vagrant,$(firstword $(MAKECMDGOALS)))
 endif
 
 .PHONY: build clean container run release goreleaser push gofmt gofmt-fix gomoqs
-.PHONY: update-glide test docker-login push-manifest push-manifest-release
+.PHONY: update-glide test lint docker-login push-manifest push-manifest-release
 .PHONY: push-release github-release help gopath gopath-fix vagrant-up-single-node
 .PHONY: vagrant-up-multi-node vagrant-destroy vagrant-clean vagrant
 .PHONY: multiarch-binverify

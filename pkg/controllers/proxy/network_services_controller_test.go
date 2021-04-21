@@ -1,11 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
 
-	"github.com/docker/libnetwork/ipvs"
+	"github.com/moby/ipvs"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/vishvananda/netlink"
@@ -77,9 +78,6 @@ func (lnm *LinuxNetworkingMockImpl) cleanupMangleTableRule(ip string, protocol s
 	return nil
 }
 
-func logf(format string, a ...interface{}) {
-	fmt.Fprintf(GinkgoWriter, "INFO: "+format+"\n", a...)
-}
 func fatalf(format string, a ...interface{}) {
 	msg := fmt.Sprintf("FATAL: "+format+"\n", a...)
 	Fail(msg)
@@ -134,12 +132,12 @@ var _ = Describe("NetworkServicesController", func() {
 	JustBeforeEach(func() {
 		clientset := fake.NewSimpleClientset()
 
-		_, err := clientset.CoreV1().Endpoints("default").Create(testcase.existingEndpoint)
+		_, err := clientset.CoreV1().Endpoints("default").Create(context.Background(), testcase.existingEndpoint, metav1.CreateOptions{})
 		if err != nil {
 			fatalf("failed to create existing endpoints: %v", err)
 		}
 
-		_, err = clientset.CoreV1().Services("default").Create(testcase.existingService)
+		_, err = clientset.CoreV1().Services("default").Create(context.Background(), testcase.existingService, metav1.CreateOptions{})
 		if err != nil {
 			fatalf("failed to create existing services: %v", err)
 		}
@@ -187,12 +185,14 @@ var _ = Describe("NetworkServicesController", func() {
 			Expect(syncErr).To(Succeed())
 		})
 		It("Should have called cleanupMangleTableRule for ExternalIPs", func() {
+			fwmark1, _ := generateFwmark("1.1.1.1", "tcp", "8080")
+			fwmark2, _ := generateFwmark("2.2.2.2", "tcp", "8080")
 			Expect(
 				fmt.Sprintf("%v", mockedLinuxNetworking.cleanupMangleTableRuleCalls())).To(
 				Equal(
 					fmt.Sprintf("[{1.1.1.1 tcp 8080 %d} {2.2.2.2 tcp 8080 %d}]",
-						generateFwmark("1.1.1.1", "tcp", "8080"),
-						generateFwmark("2.2.2.2", "tcp", "8080"))))
+						fwmark1,
+						fwmark2)))
 		})
 		It("Should have called setupPolicyRoutingForDSR", func() {
 			Expect(

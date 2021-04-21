@@ -18,7 +18,7 @@ import (
 // disableSourceDestinationCheck disables src-dst check of all the VM's when cluster
 // is provisioned on AWS. EC2 by default drops any packets originating or destination
 // to a VM with IP other than that of VM's ip. This check needs to be disabled so that
-// cross node pod-to-pod traffic can be sent and recived by a VM.
+// cross node pod-to-pod traffic can be sent and received by a VM.
 func (nrc *NetworkRoutingController) disableSourceDestinationCheck() {
 	nodes := nrc.nodeLister.List()
 
@@ -29,6 +29,10 @@ func (nrc *NetworkRoutingController) disableSourceDestinationCheck() {
 		}
 		providerID := strings.Replace(node.Spec.ProviderID, "///", "//", 1)
 		URL, err := url.Parse(providerID)
+		if err != nil {
+			glog.Errorf("Failed to parse URL for providerID " + providerID + " : " + err.Error())
+			return
+		}
 		instanceID := URL.Path
 		instanceID = strings.Trim(instanceID, "/")
 

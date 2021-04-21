@@ -9,18 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker/libnetwork/ipvs"
 	"github.com/golang/glog"
+	"github.com/moby/ipvs"
 )
 
 type gracefulQueue struct {
 	mu    sync.Mutex
 	queue []gracefulRequest
-}
-
-type gracefulQueueItem struct {
-	added   time.Time
-	service *ipvs.Service
 }
 
 type gracefulRequest struct {

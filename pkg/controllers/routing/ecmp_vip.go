@@ -1,16 +1,17 @@
 package routing
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"strings"
 
 	"github.com/golang/glog"
-	"github.com/osrg/gobgp/packet/bgp"
-	"github.com/osrg/gobgp/table"
+	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/any"
+	gobgpapi "github.com/osrg/gobgp/api"
 	v1core "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -18,38 +19,72 @@ import (
 // bgpAdvertiseVIP advertises the service vip (cluster ip or load balancer ip or external IP) the configured peers
 func (nrc *NetworkRoutingController) bgpAdvertiseVIP(vip string) error {
 
-	attrs := []bgp.PathAttributeInterface{
-		bgp.NewPathAttributeOrigin(0),
-		bgp.NewPathAttributeNextHop(nrc.nodeIP.String()),
+	glog.V(2).Infof("Advertising route: '%s/%s via %s' to peers", vip, strconv.Itoa(32), nrc.nodeIP.String())
+
+	a1, _ := ptypes.MarshalAny(&gobgpapi.OriginAttribute{
+		Origin: 0,
+	})
+	a2, _ := ptypes.MarshalAny(&gobgpapi.NextHopAttribute{
+		NextHop: nrc.nodeIP.String(),
+	})
+	attrs := []*any.Any{a1, a2}
+
+	//housj add
+	var nlri1 *any.Any
+	if len(nrc.advertiseServiceClusterIpRange) != 0 {
+		svcCidrStr := strings.Split(nrc.advertiseServiceClusterIpRange, "/")
+		svcCidrPrefixLen, _ := strconv.ParseUint(svcCidrStr[1], 10, 32)
+		nlri1, _ = ptypes.MarshalAny(&gobgpapi.IPAddressPrefix{
+			Prefix:    svcCidrStr[0],
+			PrefixLen: uint32(svcCidrPrefixLen),
+		})
+	} else {
+		nlri1, _ = ptypes.MarshalAny(&gobgpapi.IPAddressPrefix{
+			Prefix:    vip,
+			PrefixLen: 32,
+		})
 	}
 
-	//If the value of advertise-cluster-subnet parameter is not empty, then the value of advertise-cluster-subnet parameter is put into RIB, otherwise it will be done according to the original rules.
-	var svcSubnet = vip
-	var svcCidrLen = 32
-	if len(nrc.advertiseClusterSubnet) != 0 {
-		svcCidrStr := strings.Split(nrc.advertiseClusterSubnet, "/")
-		svcSubnet = svcCidrStr[0]
-		svcCidrLen, _ = strconv.Atoi(svcCidrStr[1])
-	}
-	glog.V(2).Infof("Advertising route: '%s/%s via %s' to peers", svcSubnet, strconv.Itoa(svcCidrLen), nrc.nodeIP.String())
-	_, err := nrc.bgpServer.AddPath("", []*table.Path{table.NewPath(nil, bgp.NewIPAddrPrefix(uint8(svcCidrLen),
-		svcSubnet), false, attrs, time.Now(), false)})
+	_, err := nrc.bgpServer.AddPath(context.Background(), &gobgpapi.AddPathRequest{
+		Path: &gobgpapi.Path{
+			Family: &gobgpapi.Family{Afi: gobgpapi.Family_AFI_IP, Safi: gobgpapi.Family_SAFI_UNICAST},
+			Nlri:   nlri1,
+			Pattrs: attrs,
+		},
+	})
 
 	return err
 }
 
 // bgpWithdrawVIP  unadvertises the service vip
 func (nrc *NetworkRoutingController) bgpWithdrawVIP(vip string) error {
+	glog.V(2).Infof("Withdrawing route: '%s/%s via %s' to peers", vip, strconv.Itoa(32), nrc.nodeIP.String())
 
-	//If the value of the advertise-cluster-subnet parameter is not empty, no operation will be performed, otherwise the original rules will be followed.
+	//housj add
 	var err error
-	if len(nrc.advertiseClusterSubnet) == 0 {
-		glog.V(2).Infof("Withdrawing route: '%s/%s via %s' to peers", vip, strconv.Itoa(32), nrc.nodeIP.String())
-		pathList := []*table.Path{table.NewPath(nil, bgp.NewIPAddrPrefix(uint8(32),
-			vip), true, nil, time.Now(), false)}
-		err = nrc.bgpServer.DeletePath([]byte(nil), 0, "", pathList)
-	} else {
+	if len(nrc.advertiseServiceClusterIpRange) != 0 {
 		err = nil
+	} else {
+		a1, _ := ptypes.MarshalAny(&gobgpapi.OriginAttribute{
+			Origin: 0,
+		})
+		a2, _ := ptypes.MarshalAny(&gobgpapi.NextHopAttribute{
+			NextHop: nrc.nodeIP.String(),
+		})
+		attrs := []*any.Any{a1, a2}
+		nlri, _ := ptypes.MarshalAny(&gobgpapi.IPAddressPrefix{
+			Prefix:    vip,
+			PrefixLen: 32,
+		})
+		path := gobgpapi.Path{
+			Family: &gobgpapi.Family{Afi: gobgpapi.Family_AFI_IP, Safi: gobgpapi.Family_SAFI_UNICAST},
+			Nlri:   nlri,
+			Pattrs: attrs,
+		}
+		err = nrc.bgpServer.DeletePath(context.Background(), &gobgpapi.DeletePathRequest{
+			TableType: gobgpapi.TableType_GLOBAL,
+			Path:      &path,
+		})
 	}
 
 	return err
@@ -100,13 +135,13 @@ func (nrc *NetworkRoutingController) handleServiceUpdate(svc *v1core.Service) {
 		return
 	}
 
-	toAdvertise, toWithdraw, err := nrc.getVIPsForService(svc, true)
+	toAdvertise, toWithdraw, err := nrc.getActiveVIPs()
 	if err != nil {
-		glog.Errorf("error getting routes for service: %s, err: %s", svc.Name, err)
+		glog.Errorf("error getting routes for services: %s", err)
 		return
 	}
 
-	// update export policies so that new VIP's gets addedd to clusteripprefixsit and vip gets advertised to peers
+	// update export policies so that new VIP's gets added to clusteripprefixset and vip gets advertised to peers
 	err = nrc.AddPolicies()
 	if err != nil {
 		glog.Errorf("Error adding BGP policies: %s", err.Error())
@@ -186,7 +221,7 @@ func (nrc *NetworkRoutingController) OnServiceUpdate(objNew interface{}, objOld 
 
 func (nrc *NetworkRoutingController) getWithdraw(svcOld, svcNew *v1core.Service) (out []string) {
 	if svcOld != nil && svcNew != nil {
-		out = getMissingPrevGen(nrc.getExternalIps(svcOld), nrc.getExternalIps(svcNew))
+		out = getMissingPrevGen(nrc.getExternalIPs(svcOld), nrc.getExternalIPs(svcNew))
 	}
 	return
 }
@@ -216,8 +251,7 @@ func (nrc *NetworkRoutingController) newEndpointsEventHandler() cache.ResourceEv
 		},
 		DeleteFunc: func(obj interface{}) {
 			// don't do anything if an endpoints resource is deleted since
-			// the service delete event handles route withdrawls
-			return
+			// the service delete event handles route withdrawals
 		},
 	}
 }
@@ -286,43 +320,43 @@ func (nrc *NetworkRoutingController) serviceForEndpoints(ep *v1core.Endpoints) (
 	return item, nil
 }
 
-func (nrc *NetworkRoutingController) getClusterIp(svc *v1core.Service) string {
-	clusterIp := ""
+func (nrc *NetworkRoutingController) getClusterIP(svc *v1core.Service) string {
+	clusterIP := ""
 	if svc.Spec.Type == "ClusterIP" || svc.Spec.Type == "NodePort" || svc.Spec.Type == "LoadBalancer" {
 
 		// skip headless services
 		if svc.Spec.ClusterIP != "None" && svc.Spec.ClusterIP != "" {
-			clusterIp = svc.Spec.ClusterIP
+			clusterIP = svc.Spec.ClusterIP
 		}
 	}
-	return clusterIp
+	return clusterIP
 }
 
-func (nrc *NetworkRoutingController) getExternalIps(svc *v1core.Service) []string {
-	externalIpList := make([]string, 0)
-	if svc.Spec.Type == "ClusterIP" || svc.Spec.Type == "NodePort" {
+func (nrc *NetworkRoutingController) getExternalIPs(svc *v1core.Service) []string {
+	externalIPList := make([]string, 0)
+	if svc.Spec.Type == "ClusterIP" || svc.Spec.Type == "NodePort" || svc.Spec.Type == "LoadBalancer" {
 
 		// skip headless services
 		if svc.Spec.ClusterIP != "None" && svc.Spec.ClusterIP != "" {
-			externalIpList = append(externalIpList, svc.Spec.ExternalIPs...)
+			externalIPList = append(externalIPList, svc.Spec.ExternalIPs...)
 		}
 	}
-	return externalIpList
+	return externalIPList
 }
 
-func (nrc *NetworkRoutingController) getLoadBalancerIps(svc *v1core.Service) []string {
-	loadBalancerIpList := make([]string, 0)
+func (nrc *NetworkRoutingController) getLoadBalancerIPs(svc *v1core.Service) []string {
+	loadBalancerIPList := make([]string, 0)
 	if svc.Spec.Type == "LoadBalancer" {
 		// skip headless services
 		if svc.Spec.ClusterIP != "None" && svc.Spec.ClusterIP != "" {
 			for _, lbIngress := range svc.Status.LoadBalancer.Ingress {
 				if len(lbIngress.IP) > 0 {
-					loadBalancerIpList = append(loadBalancerIpList, lbIngress.IP)
+					loadBalancerIPList = append(loadBalancerIPList, lbIngress.IP)
 				}
 			}
 		}
 	}
-	return loadBalancerIpList
+	return loadBalancerIPList
 }
 
 func (nrc *NetworkRoutingController) getAllVIPs() ([]string, []string, error) {
@@ -354,7 +388,22 @@ func (nrc *NetworkRoutingController) getVIPs(onlyActiveEndpoints bool) ([]string
 		}
 	}
 
-	return toAdvertiseList, toWithdrawList, nil
+	// We need to account for the niche case where multiple services may have the same VIP, in this case, one service
+	// might be ready while the other service is not. We still want to advertise the VIP as long as there is at least
+	// one active endpoint on the node or we might introduce a service disruption.
+	finalToWithdrawList := make([]string, 0)
+OUTER:
+	for _, withdrawVIP := range toWithdrawList {
+		for _, advertiseVIP := range toAdvertiseList {
+			if withdrawVIP == advertiseVIP {
+				// if there is a VIP that is set to both be advertised and withdrawn, don't add it to the final withdraw list
+				continue OUTER
+			}
+		}
+		finalToWithdrawList = append(finalToWithdrawList, withdrawVIP)
+	}
+
+	return toAdvertiseList, finalToWithdrawList, nil
 }
 
 func (nrc *NetworkRoutingController) shouldAdvertiseService(svc *v1core.Service, annotation string, defaultValue bool) bool {
@@ -397,21 +446,21 @@ func (nrc *NetworkRoutingController) getAllVIPsForService(svc *v1core.Service) [
 	ipList := make([]string, 0)
 
 	if nrc.shouldAdvertiseService(svc, svcAdvertiseClusterAnnotation, nrc.advertiseClusterIP) {
-		clusterIP := nrc.getClusterIp(svc)
+		clusterIP := nrc.getClusterIP(svc)
 		if clusterIP != "" {
 			ipList = append(ipList, clusterIP)
 		}
 	}
 
 	if nrc.shouldAdvertiseService(svc, svcAdvertiseExternalAnnotation, nrc.advertiseExternalIP) {
-		ipList = append(ipList, nrc.getExternalIps(svc)...)
+		ipList = append(ipList, nrc.getExternalIPs(svc)...)
 	}
 
 	// Deprecated: Use service.advertise.loadbalancer=false instead of service.skiplbips.
 	_, skiplbips := svc.Annotations[svcSkipLbIpsAnnotation]
 	advertiseLoadBalancer := nrc.shouldAdvertiseService(svc, svcAdvertiseLoadBalancerAnnotation, nrc.advertiseLoadBalancerIP)
 	if advertiseLoadBalancer && !skiplbips {
-		ipList = append(ipList, nrc.getLoadBalancerIps(svc)...)
+		ipList = append(ipList, nrc.getLoadBalancerIPs(svc)...)
 	}
 
 	return ipList

@@ -37,18 +37,19 @@ Also you can choose to run kube-router as agent running on each cluster node. Al
 ```
 Usage of kube-router:
       --advertise-cluster-ip                          Add Cluster IP of the service to the RIB so that it gets advertises to the BGP peers.
-      --advertise-cluster-subnet string               If this parameter is set, the cluster IP of service will not be put into RIB, but the value set by this parameter will be put into RIB. The main purpose of this parameter is to reduce the number of service routes sent by kube-router to the upper BGP network devices.
       --advertise-external-ip                         Add External IP of service to the RIB so that it gets advertised to the BGP peers.
       --advertise-loadbalancer-ip                     Add LoadbBalancer IP of service status as set by the LB provider to the RIB so that it gets advertised to the BGP peers.
       --advertise-pod-cidr                            Add Node's POD cidr to the RIB so that it gets advertised to the BGP peers. (default true)
+      --advertise-service-cluster-ip-range string     If this parameter is set, the cluster IP of service will not be put into RIB, but the value set by this parameter will be put into RIB. The main purpose of this parameter is to reduce the number of service routes sent by kube-router to the upper BGP network devices.
+      --auto-mtu                                      Auto detect and set the largest possible MTU for pod interfaces. (default true)
       --bgp-graceful-restart                          Enables the BGP Graceful Restart capability so that routes are preserved on unexpected restarts
       --bgp-graceful-restart-deferral-time duration   BGP Graceful restart deferral time according to RFC4724 4.1, maximum 18h. (default 6m0s)
-      --bgp-holdtime float                            This parameter is mainly used to modify the holdtime declared to BGP peer. When Kube router goes down abnormally, the local saving time of BGP route will be affected. (default 90)
-      --bgp-port uint16                               The port open for incoming BGP connections and to use for connecting with other BGP peers. (default 179)
+      --bgp-graceful-restart-time duration            BGP Graceful restart time according to RFC4724 3, maximum 4095s. (default 1m30s)
+      --bgp-holdtime duration                         This parameter is mainly used to modify the holdtime declared to BGP peer. When Kube-router goes down abnormally, the local saving time of BGP route will be affected.Holdtime must be in the range 3s to 18h12m16s. (default 1m30s)
+      --bgp-port uint32                               The port open for incoming BGP connections and to use for connecting with other BGP peers. (default 179)
       --cache-sync-timeout duration                   The timeout for cache synchronization (e.g. '5s', '1m'). Must be greater than 0. (default 1m0s)
       --cleanup-config                                Cleanup iptables rules, ipvs, ipset configuration and exit.
       --cluster-asn uint                              ASN number under which cluster nodes will run iBGP.
-      --cluster-cidr string                           CIDR range of pods in the cluster. It is used to identify traffic originating from and destinated to pods.
       --disable-source-dest-check                     Disable the source-dest-check attribute for AWS EC2 instances. When this option is false, it must be set some other way. (default true)
       --enable-cni                                    Enable CNI plugin. Disable if you want to use kube-router features alongside another CNI plugin. (default true)
       --enable-ibgp                                   Enables peering with nodes with the same ASN, if disabled will only peer with external BGP peers (default true)
@@ -78,12 +79,16 @@ Usage of kube-router:
       --peer-router-ips ipSlice                       The ip address of the external router to which all nodes will peer and advertise the cluster ip and pod cidr's. (default [])
       --peer-router-multihop-ttl uint8                Enable eBGP multihop supports -- sets multihop-ttl. (Relevant only if ttl >= 2)
       --peer-router-passwords strings                 Password for authenticating against the BGP peer defined with "--peer-router-ips".
+      --peer-router-passwords-file string             Path to file containing password for authenticating against the BGP peer defined with "--peer-router-ips". --peer-router-passwords will be preferred if both are set.
       --peer-router-ports uints                       The remote port of the external BGP to which all nodes will peer. If not set, default BGP port (179) will be used. (default [])
       --router-id string                              BGP router-id. Must be specified in a ipv6 only cluster.
       --routes-sync-period duration                   The delay between route updates and advertisements (e.g. '5s', '1m', '2h22m'). Must be greater than 0. (default 5m0s)
       --run-firewall                                  Enables Network Policy -- sets up iptables to provide ingress firewall for pods. (default true)
       --run-router                                    Enables Pod Networking -- Advertises and learns the routes to Pods via iBGP. (default true)
       --run-service-proxy                             Enables Service Proxy -- sets up IPVS for Kubernetes Services. (default true)
+      --service-cluster-ip-range string               CIDR value from which service cluster IPs are assigned. Default: 10.96.0.0/12 (default "10.96.0.0/12")
+      --service-external-ip-range strings             Specify external IP CIDRs that are used for inter-cluster communication (can be specified multiple times)
+      --service-node-port-range string                NodePort range specified with either a hyphen or colon (default "30000-32767")
   -v, --v string                                      log level for V logs (default "0")
   -V, --version                                       Print version information.
 ```

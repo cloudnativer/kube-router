@@ -8,7 +8,7 @@ This is based on kube-router to do a lot of optimization, which can support larg
  <br>
  
 Statement:<br>
-This kube-router fork from cloudnativelabs(https://github.com/cloudnativelabs/kube-router). Because we have made many changes to kube-router, many of which are not accepted by the official of cloudnativelabs, we have to create a separate project to release our optimizedkube-router version.
+This kube-router fork from <a href="https://github.com/cloudnativelabs/kube-router">cloudnativelabs</a>. Because we have made many changes to kube-router, many of which are not accepted by the official of cloudnativelabs, we have to create a separate project to release our optimizedkube-router version.
 
 <br>
  

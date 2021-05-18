@@ -6,13 +6,7 @@ Kube-router is a turnkey solution for Kubernetes networking with aim to provide 
 This is based on <a href="https://github.com/cloudnativelabs/kube-router" target="_blank">cloudnativelabs</a>'s kube-router to do a lot of optimization, which can support large-scale kubernetes network.
 
  <br>
- 
-Statement:<br>
-This kube-router fork from <a href="https://github.com/cloudnativelabs/kube-router" target="_blank">cloudnativelabs</a>. Because we have made many changes to kube-router, many of which are not accepted by the official of cloudnativelabs, we have to create a separate project to release our optimized kube-router version.
-<br>
-We respect cloudnativelabs, the original organization of kube-router. Some members of our team use kube-router in a large number of companies. Kube-router is a great CNI plug-in. Thank you cloudnativelabs.
 
-<br>
  
 ## Primary Features
 
@@ -106,26 +100,10 @@ that has been thoroughly tested and optimized.
 - [Operations Guide](./docs/operations-guide.md)
 - [Developer Guide](./docs/developing.md)
 
-## Project status
+## Statement
 
-Kube-router is being used in several production clusters by diverse set of users ranging from financial firms, gaming companies to universities. For almost a year we have listened to users and incorporated feedback. The core functionality is stable. We are working toward GA release.
+We respect cloudnativelabs, the original organization of kube-router. Some members of our team use kube-router in a large number of companies. Kube-router is a great CNI plug-in, Thank you cloudnativelabs.
+<br>
+This kube-router fork from <a href="https://github.com/cloudnativelabs/kube-router" target="_blank">cloudnativelabs</a>. Because we have made many changes to kube-router, many of which are not accepted by the official of cloudnativelabs, we have to create a separate project to release our optimized kube-router version.
 
-## Contributing
 
-We encourage all kinds of contributions, be they documentation, code, fixing
-typos, tests — anything at all. Please read the [contribution guide](./CONTRIBUTING.md).
-
-## Support & Feedback
-
-If you experience any problems please reach us on kube-router [slack channel](https://kubernetes.slack.com/messages/C8DCQGTSB/)
-for quick help. Feel free to leave feedback or raise questions by opening an issue [here](https://github.com/cloudnativelabs/kube-router/issues).
-
-## Acknowledgement
-
-Kube-router build upon following libraries:
-
-- Iptables: https://github.com/coreos/go-iptables
-- GoBGP: https://github.com/osrg/gobgp
-- Netlink: https://github.com/vishvananda/netlink
-- Ipset: https://github.com/janeczku/go-ipset
-- IPVS: https://github.com/docker/libnetwork/

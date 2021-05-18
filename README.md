@@ -100,7 +100,7 @@ that has been thoroughly tested and optimized.
 
 ## Statement
 
-We respect cloudnativelabs, the original organization of kube-router. Some members of our team use kube-router in a large number of companies. Kube-router is a great CNI plug-in, Thank you cloudnativelabs.
+We respect cloudnativelabs, the original organization of kube-router. Some members of our team use kube-router in a large number of companies. Kube-router is a great CNI plug-in, thank you cloudnativelabs.
 <br>
 This kube-router fork from <a href="https://github.com/cloudnativelabs/kube-router" target="_blank">cloudnativelabs</a>. Because we have made many changes to kube-router, many of which are not accepted by the official of cloudnativelabs, we have to create a separate project to release our optimized kube-router version.
 
